@@ -6,9 +6,6 @@ if CommandLine.arguments.contains("--selftest") {
 if let i = CommandLine.arguments.firstIndex(of: "--render-window"), i + 1 < CommandLine.arguments.count {
     exit(SelfTest.renderWindow(to: CommandLine.arguments[i + 1], dark: CommandLine.arguments.contains("--dark")))
 }
-if let i = CommandLine.arguments.firstIndex(of: "--render-patch"), i + 1 < CommandLine.arguments.count {
-    exit(SelfTest.renderPatch(to: CommandLine.arguments[i + 1]))
-}
 if CommandLine.arguments.contains("--shake-bench") {
     exit(ShakeBench.run())
 }

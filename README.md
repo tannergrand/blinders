@@ -10,14 +10,8 @@ the menu bar. Closing the window keeps it running; click the Dock icon to get it
 - Grain: Off, Subtle, Strong (film-grain speckle over the blur, see `docs/grain-sample.png`)
 - Shake Sensitivity: High, Medium (default), Low
 - Fades in and out, easing blur radius and opacity together
-- Window switch: Crossfade (default) or Instant. macOS makes the new window sharp
-  the moment it rises; Crossfade fades the blur in over the old window (a patch
-  over its frame plus a 48 pt margin for its shadow, ordered just above it), then
-  hands off to the full-screen layer. The patch tints only the window's rounded
-  shape, and draws grain on the same screen-fixed grid as the full-screen layer,
-  so nothing jumps at the hand-off. Reduce Motion in System Settings makes it instant.
-- Speed: Fast, Normal (default), Slow. On/off fade 0.2 / 0.35 / 0.6 s;
-  window switch 0.15 / 0.28 / 0.45 s
+- Fade speed: Fast, Normal (default), Slow (0.2 / 0.35 / 0.6 s on and off).
+  Switching windows is instant.
 - Debug log: `defaults write com.tannergrandstaff.blinders debugLog -bool true`,
   relaunch, then read `~/Library/Logs/Blinders.log`
 - Hides during Mission Control (`.transient` collection behavior)
@@ -40,7 +34,6 @@ Needs no permissions. Uses a private macOS API for the blur, so a future macOS u
 Blinders.app/Contents/MacOS/Blinders --selftest
 Blinders.app/Contents/MacOS/Blinders --shake-bench   # scores shake settings
 Blinders.app/Contents/MacOS/Blinders --render-window out.png [--dark]
-Blinders.app/Contents/MacOS/Blinders --render-patch out.png   # switch patch over a stand-in window
 ./tools/make-icon.sh   # redraws Resources/AppIcon.icns from tools/MakeIcon.swift
 ```
 
@@ -78,26 +71,8 @@ shakes but false-toggled 6–33 times an hour, so no preset uses it.
 - Not verified by Claude: the blur's look (no screen capture on this Mac) and a
   real hand shake (synthetic mouse events are dropped without Accessibility),
   and Mission Control hiding (the Mac was locked).
-- v0.5.1 crossfade, measured with CGWindowList every 25 ms during an
-  Outlook → Todoist switch: the new window is on top at once, the patch rises
-  0 → 1.00 over the old window by ~200 ms, and the hand-off lands at ~250 ms.
-  v0.5.0 had two bugs this fixed: it re-blurred the new window after macOS had
-  already made it sharp (sharp → blurred → sharp), and in one direction it
-  buried the patch under the full-screen layer, so the old window popped.
-  The fixed reverse direction (Todoist → Outlook) is not re-measured yet.
-- v0.5.2: the old window's shadow stayed crisp until the hand-off, then snapped
-  to blurred. The patch now reaches 48 pt past the window and tints only its
-  rounded shape (checked with `--render-patch`). Measured live, the patch sat at
-  exactly the old window's frame plus 48 pt on every side, once AppKit's
-  menu-bar nudge was turned off for overlay windows (it had moved the patch 22 pt down).
-  How the shadow now looks mid-switch is not verified by Claude.
-- v0.5.3: an outline of the old window still flashed. The patch's grain tiles
-  started at the patch's own corner, so at the hand-off the speckle inside its
-  outline jumped to the full-screen layer's pattern, and the margin showed as a
-  speckle-free box during the fade. Grain now tiles on a grid fixed to the
-  screen in both layers, and the patch draws it across its margin too.
-- v0.5.4: still a flash at the end. The hand-off is two window-server requests
-  (move the full-screen layer up, remove the patch), and a frame could render
-  between them with the old window blurred twice. Both now run inside
-  SkyLight's `SLSDisableUpdate` / `SLSReenableUpdate`, so they land in one frame,
-  as does each animation step's opacity and blur-radius change.
+- v0.5.0–0.5.4 tried a crossfade when switching windows. Each round fixed a
+  measured cause (re-blurring the new window, a buried patch, the old window's
+  shadow, grain that jumped, a frame between two window-server requests), but
+  the old window's edge still snapped at the end. v0.6.0 removed the option:
+  switching is instant again.

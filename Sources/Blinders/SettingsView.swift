@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: BlindersModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Form {
@@ -47,22 +46,8 @@ struct SettingsView: View {
                 Picker("Grain", selection: $model.grain) {
                     ForEach(Grain.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-            }
-
-            Section {
-                Picker("Window switch", selection: $model.switchStyle) {
-                    ForEach(SwitchStyle.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                Picker("Speed", selection: $model.speed) {
+                Picker("Fade speed", selection: $model.speed) {
                     ForEach(MotionSpeed.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-            } header: {
-                Text("Motion")
-            } footer: {
-                if reduceMotion {
-                    Text("Reduce Motion is on in System Settings, so window switches are instant.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 

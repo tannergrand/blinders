@@ -23,9 +23,6 @@ final class BlindersModel: ObservableObject {
     @Published var grain: Grain {
         didSet { overlay.grain = grain; defaults.set(grain.rawValue, forKey: "grain") }
     }
-    @Published var switchStyle: SwitchStyle {
-        didSet { overlay.switchStyle = switchStyle; defaults.set(switchStyle.rawValue, forKey: "switchStyle") }
-    }
     @Published var speed: MotionSpeed {
         didSet { overlay.speed = speed; defaults.set(speed.rawValue, forKey: "motionSpeed") }
     }
@@ -47,14 +44,13 @@ final class BlindersModel: ObservableObject {
         defaults.register(defaults: [
             "shakeEnabled": true, "shakeSensitivityPreset": ShakeSensitivity.medium.rawValue, "isOn": false,
             "strength": Strength.medium.rawValue, "grain": Grain.subtle.rawValue,
-            "switchStyle": SwitchStyle.crossfade.rawValue, "motionSpeed": MotionSpeed.normal.rawValue,
+            "motionSpeed": MotionSpeed.normal.rawValue,
         ])
         isOn = defaults.bool(forKey: "isOn") || CommandLine.arguments.contains("--on")
         shakeEnabled = defaults.bool(forKey: "shakeEnabled")
         sensitivity = ShakeSensitivity(rawValue: defaults.string(forKey: "shakeSensitivityPreset") ?? "") ?? .medium
         strength = Strength(rawValue: defaults.string(forKey: "strength") ?? "") ?? .medium
         grain = Grain(rawValue: defaults.string(forKey: "grain") ?? "") ?? .subtle
-        switchStyle = SwitchStyle(rawValue: defaults.string(forKey: "switchStyle") ?? "") ?? .crossfade
         speed = MotionSpeed(rawValue: defaults.string(forKey: "motionSpeed") ?? "") ?? .normal
         openAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -62,7 +58,6 @@ final class BlindersModel: ObservableObject {
         guard live else { return }
         overlay.strength = strength
         overlay.grain = grain
-        overlay.switchStyle = switchStyle
         overlay.speed = speed
         shake.sensitivity = sensitivity
         shake.isEnabled = shakeEnabled

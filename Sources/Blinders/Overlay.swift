@@ -67,9 +67,8 @@ final class GrainView: NSView {
         let clip = bounds.intersection(dirtyRect)
         ctx.saveGState()
         ctx.clip(to: clip)
-        // Tiles sit on a grid fixed to the screen, not to this view, so the switch
-        // patch's speckle lines up pixel for pixel with the full-screen layer's.
-        // Otherwise the speckle jumps inside the patch's outline at the hand-off.
+        // Tiles sit on a grid fixed to the screen, not to this view, so the speckle
+        // lines up across screens.
         let image = GrainTexture.image
         let tile = image.size
         let origin = window.map { $0.convertPoint(toScreen: convert(NSPoint.zero, to: nil)) } ?? .zero
@@ -112,9 +111,8 @@ enum Blur {
     }
 }
 
-/// Groups several window-server changes into one on-screen frame (SkyLight, private).
-/// Reordering one layer and removing another are separate requests; without this,
-/// a frame can land between them and flash the old window's outline.
+/// Groups several window-server changes into one on-screen frame (SkyLight, private),
+/// so each fade step's opacity and blur radius always change together.
 enum ScreenUpdates {
     typealias Fn = @convention(c) (Int32) -> Int32
     private static let disable: Fn? = Blur.symbol("SLSDisableUpdate") ?? Blur.symbol("CGSDisableUpdate")
@@ -150,20 +148,6 @@ enum FrontWindow {
         return nil
     }
 
-    /// A window's frame in AppKit screen coordinates (origin bottom-left of the main screen).
-    static func cocoaFrame(of wid: CGWindowID) -> NSRect? {
-        guard let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]])?.first,
-              info[kCGWindowIsOnscreen as String] as? Bool == true,
-              let b = info[kCGWindowBounds as String] as? [String: Any],
-              let r = CGRect(dictionaryRepresentation: b as CFDictionary),
-              let mainHeight = NSScreen.screens.first?.frame.height else { return nil }
-        return NSRect(x: r.minX, y: mainHeight - r.maxY, width: r.width, height: r.height)
-    }
-}
-
-enum SwitchStyle: String, CaseIterable {
-    case crossfade, instant
-    var title: String { rawValue.capitalized }
 }
 
 enum MotionSpeed: String, CaseIterable {
@@ -173,61 +157,10 @@ enum MotionSpeed: String, CaseIterable {
     var fade: Double {
         switch self { case .fast: 0.2; case .normal: 0.35; case .slow: 0.6 }
     }
-    /// Moving the focus from one window to another.
-    var switchDuration: Double {
-        switch self { case .fast: 0.15; case .normal: 0.28; case .slow: 0.45 }
-    }
 }
 
-/// The switch patch's content. Tint covers only the old window's rounded shape.
-/// Grain covers the whole patch, margin included: the patch's blur wipes out the
-/// full-screen layer's speckle underneath, so the patch has to put it back.
-/// The margin lets the window's drop shadow blur with it instead of snapping later.
-final class PatchContentView: NSView {
-    static let margin: CGFloat = 48      // macOS window shadows reach ~40 pt below
-    static let corner: CGFloat = 20      // close to current macOS window corners
-
-    private let card = NSView()
-    private let grainView = GrainView()
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        autoresizingMask = [.width, .height]
-        card.wantsLayer = true
-        card.layer?.cornerRadius = Self.corner
-        card.layer?.cornerCurve = .continuous
-        card.layer?.masksToBounds = true
-        addSubview(card)
-        addSubview(grainView)      // over the tint, as in the full-screen layer
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        card.frame = bounds.insetBy(dx: Self.margin, dy: Self.margin)
-        grainView.frame = bounds
-    }
-
-    func style(tint: CGFloat, grain: Grain) {
-        card.layer?.backgroundColor = NSColor.black.withAlphaComponent(tint).cgColor
-        grainView.grain = grain
-    }
-}
-
-/// AppKit nudges windows down out from under the menu bar. The patch reaches 48 pt
-/// past the old window's edges, so for a window at the top of the screen that nudge
-/// put its tint 22 pt below the real window. Overlays take their frame as given.
-final class OverlayWindow: NSWindow {
-    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-}
-
-/// A set of click-through blurred windows: one per screen, or a single patch.
+/// One click-through blurred window per screen.
 final class OverlayLayer {
-    let isPatch: Bool
-    init(isPatch: Bool = false) { self.isPatch = isPatch }
-
     private(set) var windows: [NSWindow] = []
     private(set) var level: CGFloat = 0     // 0 hidden … 1 full blur
     var strength: Strength = .medium
@@ -242,7 +175,7 @@ final class OverlayLayer {
     }
 
     private static func makeWindow(_ frame: NSRect) -> NSWindow {
-        let w = OverlayWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         w.title = "Blinders Overlay"
         w.isOpaque = false
         w.hasShadow = false
@@ -260,13 +193,6 @@ final class OverlayLayer {
 
     func applyStyle() {
         for w in windows {
-            if isPatch {
-                w.backgroundColor = .clear
-                Blur.apply(to: w, radius: radius)
-                if !(w.contentView is PatchContentView) { w.contentView = PatchContentView() }
-                (w.contentView as? PatchContentView)?.style(tint: strength.tint, grain: grain)
-                continue
-            }
             w.backgroundColor = NSColor.black.withAlphaComponent(strength.tint)
             if Blur.apply(to: w, radius: radius) {
                 if !(w.contentView is GrainView) { w.contentView = GrainView() }
@@ -295,54 +221,28 @@ final class OverlayLayer {
         }
     }
 
-    func setFrame(_ frame: NSRect) {
-        let f = isPatch ? frame.insetBy(dx: -PatchContentView.margin, dy: -PatchContentView.margin) : frame
-        for w in windows {
-            w.setFrame(f, display: true)
-            // Moving a window doesn't redraw it, and the grain grid depends on position.
-            Self.markGrain(w.contentView)
-            w.displayIfNeeded()
-        }
-    }
-
-    private static func markGrain(_ v: NSView?) {
-        guard let v else { return }
-        if v is GrainView { v.needsDisplay = true }
-        v.subviews.forEach(markGrain)
-    }
     func order(below wid: CGWindowID) { windows.forEach { $0.order(.below, relativeTo: Int(wid)) } }
-    func order(above wid: CGWindowID) { windows.forEach { $0.order(.above, relativeTo: Int(wid)) } }
     func orderOut() { windows.forEach { $0.orderOut(nil) } }
 }
 
 /// Keeps the blur directly behind the frontmost window so only that window is sharp.
-///
-/// Switching focus: macOS raises the new window above the blur the instant you
-/// click, so it is already sharp. Blinders never re-blurs it. Instead the old
-/// window fades into the blur under a patch sized to its frame, then the
-/// full-screen layer moves up and the patch goes away:
-///   new window   (sharp from the first frame)
-///   patch        ← blur over the old window's frame only, fading in (ordered above the old window)
-///   old window
-///   primary      ← full-screen layer, unchanged until the hand-off
+/// Switching windows is instant: macOS raises the new window above the blur, and
+/// the blur moves up behind it on the next check. (A crossfade was tried in
+/// v0.5.0–0.5.4 and removed: the old window's edge kept snapping at the end.)
 final class OverlayController {
     private(set) var isOn = false
     var strength: Strength = .medium {
-        didSet { allLayers.forEach { $0.strength = strength; $0.applyStyle() } }
+        didSet { primary.strength = strength; primary.applyStyle() }
     }
     var grain: Grain = .subtle {
-        didSet { allLayers.forEach { $0.grain = grain; $0.applyStyle() } }
+        didSet { primary.grain = grain; primary.applyStyle() }
     }
-    var switchStyle: SwitchStyle = .crossfade
     var speed: MotionSpeed = .normal
 
     private let primary = OverlayLayer()
-    private let patch = OverlayLayer(isPatch: true)
-    private var allLayers: [OverlayLayer] { [primary, patch] }
-    private var overlayIDs: Set<CGWindowID> { allLayers.reduce(into: []) { $0.formUnion($1.ids) } }
+    private var overlayIDs: Set<CGWindowID> { primary.ids }
 
     private struct Animation {
-        let isFade: Bool
         let stop: () -> Void      // freeze where it is
         let finish: () -> Void    // jump to the end
     }
@@ -403,7 +303,6 @@ final class OverlayController {
         finishAnimation()
         let frames = NSScreen.screens.map(\.frame)
         primary.rebuild(frames: frames)
-        patch.rebuild(frames: [NSScreen.screens.first?.frame ?? .zero])
         shown = false
         if isOn {
             lastFront = 0
@@ -443,50 +342,15 @@ final class OverlayController {
             return
         }
         if wid != lastFront {
-            debug("switch \(lastFront) -> \(wid) front=\(front.localizedName ?? "?") anim=\(anim.map { $0.isFade ? "fade" : "switch" } ?? "none")")
-            let old = lastFront
+            debug("switch \(lastFront) -> \(wid) front=\(front.localizedName ?? "?")")
             lastFront = wid
-            if anim?.isFade == true {
-                primary.order(below: wid)   // still fading in: just move it
-            } else {
-                switchFocus(from: old, to: wid)
-            }
+            primary.order(below: wid)
             return
         }
         // Re-assert the order about once a second in case a window slipped in between.
-        if anim == nil && (force || ticks % 10 == 0) {
+        if force || ticks % 10 == 0 {
             primary.order(below: wid)
         }
-    }
-
-    private func switchFocus(from old: CGWindowID, to wid: CGWindowID) {
-        finishAnimation()
-        guard switchStyle == .crossfade,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              primary.level > 0.99,
-              old != 0,
-              let frame = FrontWindow.cocoaFrame(of: old) else {
-            debug("instant: style=\(switchStyle) level=\(primary.level) old=\(old) frame=\(String(describing: FrontWindow.cocoaFrame(of: old)))")
-            primary.order(below: wid)
-            return
-        }
-        let primary = self.primary, patch = self.patch
-        patch.setFrame(frame)
-        patch.setLevel(0)
-        // Above the old window, not below the new one: the activation notice can land
-        // before macOS has raised the new window, and "below it" would then bury the
-        // patch under the full-screen layer.
-        patch.order(above: old)
-        debug("patch over \(old) at \(frame)")
-        animate(speed.switchDuration, isFade: false, curve: .easeOut, step: { e in
-            patch.setLevel(e)
-        }, done: { [weak self] in
-            self?.debug("hand-off below \(wid)")
-            ScreenUpdates.atomically {
-                primary.order(below: wid)    // the patch was already blurring that region
-                patch.orderOut()
-            }
-        })
     }
 
     /// On/off fade of the main layer. Reversing mid-fade starts from wherever it is.
@@ -494,14 +358,15 @@ final class OverlayController {
         let wantShown = target > 0
         if wantShown == shown && anim == nil && primary.level == target { return }
         shown = wantShown
-        if anim?.isFade == true { anim?.stop(); anim = nil } else { finishAnimation() }
+        anim?.stop()
+        anim = nil
 
         let layer = primary, from = layer.level
-        animate(speed.fade * Double(abs(target - from)), isFade: true, curve: .easeInOut, step: { e in
+        animate(speed.fade * Double(abs(target - from)), step: { e in
             layer.setLevel(from + (target - from) * e)
         }, done: { [weak self] in
             guard let self, !self.shown else { return }
-            self.allLayers.forEach { $0.orderOut() }
+            self.primary.orderOut()
         })
     }
 
@@ -521,19 +386,8 @@ final class OverlayController {
         a?.finish()
     }
 
-    enum Curve {
-        case easeInOut   // on/off: gentle at both ends
-        case easeOut     // switching: moves straight away, settles softly
-        func callAsFunction(_ p: Double) -> Double {
-            switch self {
-            case .easeInOut: p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
-            case .easeOut: 1 - pow(1 - p, 3)
-            }
-        }
-    }
-
-    /// Runs on the main run loop's common mode, so it keeps going while a menu is open.
-    private func animate(_ duration: Double, isFade: Bool, curve: Curve,
+    /// Ease-in-out on the main run loop's common mode, so it keeps going while a menu is open.
+    private func animate(_ duration: Double,
                          step: @escaping (CGFloat) -> Void, done: @escaping () -> Void) {
         guard duration > 0.01 else { step(1); done(); return }
         let start = CACurrentMediaTime()
@@ -546,12 +400,12 @@ final class OverlayController {
                 self?.anim = nil
                 complete()
             } else {
-                ScreenUpdates.atomically { step(CGFloat(curve(p))) }
+                let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+                ScreenUpdates.atomically { step(CGFloat(eased)) }
             }
         }
         RunLoop.main.add(t, forMode: .common)
-        anim = Animation(isFade: isFade,
-                         stop: { t.invalidate(); over = true },
+        anim = Animation(stop: { t.invalidate(); over = true },
                          finish: { t.invalidate(); complete() })
     }
 }
