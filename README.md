@@ -12,8 +12,10 @@ the menu bar. Closing the window keeps it running; click the Dock icon to get it
 - Fades in and out, easing blur radius and opacity together
 - Window switch: Crossfade (default) or Instant. macOS makes the new window sharp
   the moment it rises; Crossfade fades the blur in over the old window (a patch
-  sized to its frame, ordered just above it), then hands off to the full-screen
-  layer. Reduce Motion in System Settings makes it instant.
+  over its frame plus a 48 pt margin for its shadow, ordered just above it), then
+  hands off to the full-screen layer. The patch tints only the window's rounded
+  shape, and draws grain on the same screen-fixed grid as the full-screen layer,
+  so nothing jumps at the hand-off. Reduce Motion in System Settings makes it instant.
 - Speed: Fast, Normal (default), Slow. On/off fade 0.2 / 0.35 / 0.6 s;
   window switch 0.15 / 0.28 / 0.45 s
 - Debug log: `defaults write com.tannergrandstaff.blinders debugLog -bool true`,
@@ -38,6 +40,7 @@ Needs no permissions. Uses a private macOS API for the blur, so a future macOS u
 Blinders.app/Contents/MacOS/Blinders --selftest
 Blinders.app/Contents/MacOS/Blinders --shake-bench   # scores shake settings
 Blinders.app/Contents/MacOS/Blinders --render-window out.png [--dark]
+Blinders.app/Contents/MacOS/Blinders --render-patch out.png   # switch patch over a stand-in window
 ./tools/make-icon.sh   # redraws Resources/AppIcon.icns from tools/MakeIcon.swift
 ```
 
@@ -67,7 +70,7 @@ That last rule took false toggles from about 1.5/hr to 0: it rejects
 text-selection scrubs and scrollbar drags. Three turns caught more gentle
 shakes but false-toggled 6–33 times an hour, so no preset uses it.
 
-## Verified / not verified (v0.5.1, 2026-11-23)
+## Verified / not verified (v0.5.2, 2026-11-23)
 
 - Verified: shake-detector logic (13 synthetic cases, both axes, including the sensitivity
   ends), blur symbols resolve on macOS 27.2, overlay lands directly behind the
@@ -82,3 +85,14 @@ shakes but false-toggled 6–33 times an hour, so no preset uses it.
   already made it sharp (sharp → blurred → sharp), and in one direction it
   buried the patch under the full-screen layer, so the old window popped.
   The fixed reverse direction (Todoist → Outlook) is not re-measured yet.
+- v0.5.2: the old window's shadow stayed crisp until the hand-off, then snapped
+  to blurred. The patch now reaches 48 pt past the window and tints only its
+  rounded shape (checked with `--render-patch`). Measured live, the patch sat at
+  exactly the old window's frame plus 48 pt on every side, once AppKit's
+  menu-bar nudge was turned off for overlay windows (it had moved the patch 22 pt down).
+  How the shadow now looks mid-switch is not verified by Claude.
+- v0.5.3: an outline of the old window still flashed. The patch's grain tiles
+  started at the patch's own corner, so at the hand-off the speckle inside its
+  outline jumped to the full-screen layer's pattern, and the margin showed as a
+  speckle-free box during the fade. Grain now tiles on a grid fixed to the
+  screen in both layers, and the patch draws it across its margin too.

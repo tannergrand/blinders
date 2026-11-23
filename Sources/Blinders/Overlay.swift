@@ -63,11 +63,27 @@ final class GrainView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard grain != .off, let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.saveGState()
-        ctx.setAlpha(grain.opacity)
-        NSColor(patternImage: GrainTexture.image).setFill()
         // dirtyRect can extend past this view in snapshot renders; never paint outside bounds.
-        bounds.intersection(dirtyRect).fill(using: .sourceOver)
+        let clip = bounds.intersection(dirtyRect)
+        ctx.saveGState()
+        ctx.clip(to: clip)
+        // Tiles sit on a grid fixed to the screen, not to this view, so the switch
+        // patch's speckle lines up pixel for pixel with the full-screen layer's.
+        // Otherwise the speckle jumps inside the patch's outline at the hand-off.
+        let image = GrainTexture.image
+        let tile = image.size
+        let origin = window.map { $0.convertPoint(toScreen: convert(NSPoint.zero, to: nil)) } ?? .zero
+        var y = floor((origin.y + clip.minY) / tile.height) * tile.height - origin.y
+        while y < clip.maxY {
+            var x = floor((origin.x + clip.minX) / tile.width) * tile.width - origin.x
+            while x < clip.maxX {
+                // NSImage.draw ignores the context alpha, so pass the opacity here.
+                image.draw(in: NSRect(x: x, y: y, width: tile.width, height: tile.height),
+                           from: .zero, operation: .sourceOver, fraction: grain.opacity)
+                x += tile.width
+            }
+            y += tile.height
+        }
         ctx.restoreGState()
     }
 }
@@ -144,8 +160,55 @@ enum MotionSpeed: String, CaseIterable {
     }
 }
 
+/// The switch patch's content. Tint covers only the old window's rounded shape.
+/// Grain covers the whole patch, margin included: the patch's blur wipes out the
+/// full-screen layer's speckle underneath, so the patch has to put it back.
+/// The margin lets the window's drop shadow blur with it instead of snapping later.
+final class PatchContentView: NSView {
+    static let margin: CGFloat = 48      // macOS window shadows reach ~40 pt below
+    static let corner: CGFloat = 20      // close to current macOS window corners
+
+    private let card = NSView()
+    private let grainView = GrainView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        autoresizingMask = [.width, .height]
+        card.wantsLayer = true
+        card.layer?.cornerRadius = Self.corner
+        card.layer?.cornerCurve = .continuous
+        card.layer?.masksToBounds = true
+        addSubview(card)
+        addSubview(grainView)      // over the tint, as in the full-screen layer
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        card.frame = bounds.insetBy(dx: Self.margin, dy: Self.margin)
+        grainView.frame = bounds
+    }
+
+    func style(tint: CGFloat, grain: Grain) {
+        card.layer?.backgroundColor = NSColor.black.withAlphaComponent(tint).cgColor
+        grainView.grain = grain
+    }
+}
+
+/// AppKit nudges windows down out from under the menu bar. The patch reaches 48 pt
+/// past the old window's edges, so for a window at the top of the screen that nudge
+/// put its tint 22 pt below the real window. Overlays take their frame as given.
+final class OverlayWindow: NSWindow {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
 /// A set of click-through blurred windows: one per screen, or a single patch.
 final class OverlayLayer {
+    let isPatch: Bool
+    init(isPatch: Bool = false) { self.isPatch = isPatch }
+
     private(set) var windows: [NSWindow] = []
     private(set) var level: CGFloat = 0     // 0 hidden … 1 full blur
     var strength: Strength = .medium
@@ -160,7 +223,7 @@ final class OverlayLayer {
     }
 
     private static func makeWindow(_ frame: NSRect) -> NSWindow {
-        let w = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let w = OverlayWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         w.title = "Blinders Overlay"
         w.isOpaque = false
         w.hasShadow = false
@@ -178,6 +241,13 @@ final class OverlayLayer {
 
     func applyStyle() {
         for w in windows {
+            if isPatch {
+                w.backgroundColor = .clear
+                Blur.apply(to: w, radius: radius)
+                if !(w.contentView is PatchContentView) { w.contentView = PatchContentView() }
+                (w.contentView as? PatchContentView)?.style(tint: strength.tint, grain: grain)
+                continue
+            }
             w.backgroundColor = NSColor.black.withAlphaComponent(strength.tint)
             if Blur.apply(to: w, radius: radius) {
                 if !(w.contentView is GrainView) { w.contentView = GrainView() }
@@ -206,7 +276,21 @@ final class OverlayLayer {
         }
     }
 
-    func setFrame(_ frame: NSRect) { windows.forEach { $0.setFrame(frame, display: false) } }
+    func setFrame(_ frame: NSRect) {
+        let f = isPatch ? frame.insetBy(dx: -PatchContentView.margin, dy: -PatchContentView.margin) : frame
+        for w in windows {
+            w.setFrame(f, display: true)
+            // Moving a window doesn't redraw it, and the grain grid depends on position.
+            Self.markGrain(w.contentView)
+            w.displayIfNeeded()
+        }
+    }
+
+    private static func markGrain(_ v: NSView?) {
+        guard let v else { return }
+        if v is GrainView { v.needsDisplay = true }
+        v.subviews.forEach(markGrain)
+    }
     func order(below wid: CGWindowID) { windows.forEach { $0.order(.below, relativeTo: Int(wid)) } }
     func order(above wid: CGWindowID) { windows.forEach { $0.order(.above, relativeTo: Int(wid)) } }
     func orderOut() { windows.forEach { $0.orderOut(nil) } }
@@ -234,7 +318,7 @@ final class OverlayController {
     var speed: MotionSpeed = .normal
 
     private let primary = OverlayLayer()
-    private let patch = OverlayLayer()
+    private let patch = OverlayLayer(isPatch: true)
     private var allLayers: [OverlayLayer] { [primary, patch] }
     private var overlayIDs: Set<CGWindowID> { allLayers.reduce(into: []) { $0.formUnion($1.ids) } }
 

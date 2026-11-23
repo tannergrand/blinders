@@ -145,4 +145,37 @@ enum SelfTest {
         print("wrote \(path) \(Int(host.bounds.width))x\(Int(host.bounds.height))")
         return 0
     }
+
+    /// Dev aid: the switch patch over a stand-in window, to check the tint lines up
+    /// with the window's corners and the margin covers its shadow. Blur can't render here.
+    static func renderPatch(to path: String) -> Int32 {
+        _ = NSApplication.shared
+        let size = NSSize(width: 520, height: 400)
+        let root = NSView(frame: NSRect(origin: .zero, size: size))
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.systemTeal.cgColor
+        let win = NSRect(x: 110, y: 110, width: 300, height: 200)
+        let fake = NSView(frame: win)
+        fake.wantsLayer = true
+        fake.layer?.backgroundColor = NSColor.white.cgColor
+        fake.layer?.cornerRadius = PatchContentView.corner
+        fake.layer?.cornerCurve = .continuous
+        fake.shadow = NSShadow()
+        fake.layer?.shadowOpacity = 0.5
+        fake.layer?.shadowRadius = 18
+        fake.layer?.shadowOffset = CGSize(width: 0, height: -14)
+        root.addSubview(fake)
+        let patch = PatchContentView(frame: win.insetBy(dx: -PatchContentView.margin, dy: -PatchContentView.margin))
+        patch.style(tint: 0.35, grain: .strong)
+        patch.layer?.borderColor = NSColor.systemRed.cgColor   // patch bounds, for the check only
+        patch.layer?.borderWidth = 1
+        root.addSubview(patch)
+        patch.layoutSubtreeIfNeeded()
+        guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return 1 }
+        root.cacheDisplay(in: root.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: URL(fileURLWithPath: path))) != nil else { return 1 }
+        print("wrote \(path)")
+        return 0
+    }
 }
