@@ -78,6 +78,7 @@ enum SelfTest {
               fires(amplitude: 150, legSeconds: 0.1, legs: 6, start: 0.65, vertical: true, detector: &d) == 0)
 
         check("SkyLight blur symbols resolve", Blur.isAvailable)
+        check("SkyLight screen-update grouping resolves", ScreenUpdates.isAvailable)
 
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         print("INFO frontmost pid \(pid) top window \(FrontWindow.topWindow(of: pid).map(String.init) ?? "none")")

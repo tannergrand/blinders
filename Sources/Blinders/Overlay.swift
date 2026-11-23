@@ -95,10 +95,10 @@ enum Blur {
     typealias RadiusFn = @convention(c) (Int32, Int32, Int32) -> Int32
 
     private static let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
-    private static let connection: ConnFn? = symbol("SLSMainConnectionID") ?? symbol("CGSMainConnectionID")
+    static let connection: ConnFn? = symbol("SLSMainConnectionID") ?? symbol("CGSMainConnectionID")
     private static let setRadius: RadiusFn? = symbol("SLSSetWindowBackgroundBlurRadius") ?? symbol("CGSSetWindowBackgroundBlurRadius")
 
-    private static func symbol<T>(_ name: String) -> T? {
+    static func symbol<T>(_ name: String) -> T? {
         guard let handle, let p = dlsym(handle, name) else { return nil }
         return unsafeBitCast(p, to: T.self)
     }
@@ -109,6 +109,25 @@ enum Blur {
     static func apply(to window: NSWindow, radius: Int) -> Bool {
         guard let connection, let setRadius, window.windowNumber > 0 else { return false }
         return setRadius(connection(), Int32(window.windowNumber), Int32(radius)) == 0
+    }
+}
+
+/// Groups several window-server changes into one on-screen frame (SkyLight, private).
+/// Reordering one layer and removing another are separate requests; without this,
+/// a frame can land between them and flash the old window's outline.
+enum ScreenUpdates {
+    typealias Fn = @convention(c) (Int32) -> Int32
+    private static let disable: Fn? = Blur.symbol("SLSDisableUpdate") ?? Blur.symbol("CGSDisableUpdate")
+    private static let reenable: Fn? = Blur.symbol("SLSReenableUpdate") ?? Blur.symbol("CGSReenableUpdate")
+
+    static var isAvailable: Bool { disable != nil && reenable != nil && Blur.connection != nil }
+
+    static func atomically(_ body: () -> Void) {
+        guard let disable, let reenable, let connection = Blur.connection else { body(); return }
+        let cid = connection()
+        _ = disable(cid)
+        defer { _ = reenable(cid) }   // a missed re-enable would freeze the screen
+        body()
     }
 }
 
@@ -463,8 +482,10 @@ final class OverlayController {
             patch.setLevel(e)
         }, done: { [weak self] in
             self?.debug("hand-off below \(wid)")
-            primary.order(below: wid)    // the patch was already blurring that region
-            patch.orderOut()
+            ScreenUpdates.atomically {
+                primary.order(below: wid)    // the patch was already blurring that region
+                patch.orderOut()
+            }
         })
     }
 
@@ -517,7 +538,7 @@ final class OverlayController {
         guard duration > 0.01 else { step(1); done(); return }
         let start = CACurrentMediaTime()
         var over = false
-        let complete = { if !over { over = true; step(1); done() } }
+        let complete = { if !over { over = true; ScreenUpdates.atomically { step(1) }; done() } }
         let t = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] t in
             let p = min(1, (CACurrentMediaTime() - start) / duration)
             if p >= 1 {
@@ -525,7 +546,7 @@ final class OverlayController {
                 self?.anim = nil
                 complete()
             } else {
-                step(CGFloat(curve(p)))
+                ScreenUpdates.atomically { step(CGFloat(curve(p))) }
             }
         }
         RunLoop.main.add(t, forMode: .common)

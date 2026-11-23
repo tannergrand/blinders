@@ -96,3 +96,8 @@ shakes but false-toggled 6–33 times an hour, so no preset uses it.
   outline jumped to the full-screen layer's pattern, and the margin showed as a
   speckle-free box during the fade. Grain now tiles on a grid fixed to the
   screen in both layers, and the patch draws it across its margin too.
+- v0.5.4: still a flash at the end. The hand-off is two window-server requests
+  (move the full-screen layer up, remove the patch), and a frame could render
+  between them with the old window blurred twice. Both now run inside
+  SkyLight's `SLSDisableUpdate` / `SLSReenableUpdate`, so they land in one frame,
+  as does each animation step's opacity and blur-radius change.
